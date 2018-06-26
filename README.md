@@ -1,7 +1,7 @@
 # OxChain-Project
 http://oxchain.uk/
 
-**The contracts have been tested on geth VERSION: 1.6.7-stable-ab5646c5 and remix: v0.4.21+commit.
+**The contracts have been tested on geth VERSION: 1.6.7-stable-ab5646c5 and remix: v0.4.21+commit.**
 
 This is a short guide of the smart contracts for the UI designers. This document will be extended shortly. 
 
