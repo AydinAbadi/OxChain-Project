@@ -1,0 +1,339 @@
+
+// Author: Aydin Abadi. The code is under MIT licence. 
+pragma solidity ^0.4.4;
+
+// Main contact
+contract Master_contract {
+    
+    address public token_contract_addr;// address of token_contract.
+    address public owner;// the contract owner/creator which is the charity.
+    uint public num_of_beneficiaries;// total number of beneficiaries in this master contract. 
+    uint public projects_count;// total number of projects not canceled. 
+    uint public max_allowed_tokens;// a donor cannot assign more token than max_allowed_tokens to a project. It is not used in this contract yet.
+    uint public cont_validity_period;// the period within which the contract is valid.
+    uint public cont_start_date;// the contract start date.
+    uint public cont_expiry_date;// the contract expiry date.
+    uint public num_of_validators;
+    uint public max_validators; // The charity should defined max number of validators befor projects start (added June 19th)
+    uint public max_beneficiaries;// The charity should defined max number of beneficiaries befor  projects start (added June 19th) 
+    uint public num_of_required_validations;// number of validations required for a project to finalize.
+    uint public id_counter;// total number of ids generated. It's used to delete the canceled id's in projects_ID_rep. Note that its value only incremented (never gets decremented)
+    uint min_allowed_tokens;// it's been set to zero for now. 
+    uint num_of_donors;// total number of donors engaged in this project so far. This counter allows us to retrive their address.
+    uint project_count;// total number of project made in this contract.
+    mapping (uint => address) public validators_rep;
+    mapping (address => uint) public num_projects_donor_created;// given the number of a donor created, it can regenerate its project id and checks if the corresponding project status (e.g. cancelled, finalied, expired) in projects_rep.
+    mapping (address => uint) public token_locked;// total number of tokens allocated to this contract by a donor.
+    mapping (uint => address) public beneficiaries_addr;// valid beneficiaries addresses in this master contract. 
+    mapping (bytes6 => Project) public projects_rep;// repository of projects created in this contract.
+    mapping (uint => bytes6) public projects_ID_rep;
+    mapping (uint => address) donors_rep;// is used by remove_all_expired_projects.
+    struct Project{
+        mapping (uint => address) pro_validators_rep;// One may want to extract the validator input from validators_input_rep by using every validator in validators_rep. 
+        // However, such approach has a  drawback: the input of a validator not engaged in a project and the one who proved false would be the same. 
+        //also, for to let an auditor to audit each validator's input (no matter if it's true or flse) for each project we need to store the addr. of validators engaged in that project.
+        mapping (address => bool) validators_input;// input of each validator to a project (i.e. true/false)
+        address recipient_addr;// address of the token recipient
+        address donor_addr; //  the address of the user who's created this poroject
+        string desc;// a description provided by the user
+        bytes6 ID; // a project's unique id.
+        bool token_transfered;// this value would become true, after the project is validated and the assigned tokens are transfered. 
+        uint assined_tokens;// Number of tokens to be transfered to the recipient if the condition is met.
+        uint pro_start_date;// the project start date.
+        uint pro_expiry_date;
+        uint pro_cancelation_period; // the period within which the user can cancel the project.
+        uint num_of_validations;// it keeps the number of validations (i.e. true) recived by a subset of validators.
+        uint num_of_validators_engaged;
+    }
+
+     modifier only_owner{
+         require (msg.sender == owner);
+         _;}
+     // contructor   -- min_num_of_validations:  number of validators required to validate a project. 
+    function Master_contract (uint num_of_validations, uint mx_validators, uint mx_beneficiaries,address _validator_addr,address _ben_addr, uint min_tokens,uint max_tokens, address _token_cont_addr, uint _cont_validity_period) public {
+        owner = msg.sender; 
+        num_of_beneficiaries++;
+        beneficiaries_addr[num_of_beneficiaries] = _ben_addr;
+        min_allowed_tokens = min_tokens;
+        max_allowed_tokens = max_tokens; //added June 19th
+        token_contract_addr = _token_cont_addr;
+        cont_validity_period = _cont_validity_period; 
+        cont_start_date = now; 
+        cont_expiry_date = cont_start_date + cont_validity_period;
+        num_of_required_validations = num_of_validations;
+        num_of_validators++;//added June 19th
+        validators_rep[num_of_validators] = _validator_addr;//added June 19th
+        max_validators = mx_validators; //added June 19th
+        require(num_of_validations <= mx_validators);// added June 20th.
+        max_beneficiaries = mx_beneficiaries;//added June 19th
+    }
+    // allows the charity to add beneficiaries to this master contract.
+    function add_beneficiary (address _ben_addr) external only_owner{
+        //To prevent duplication, check if the new beneficiary has not already been registered.
+        require(num_of_beneficiaries <= max_beneficiaries);// it ensures that the charity cannot define more than predetermined number of beneficiaries. 
+        bool is_in;
+        uint temp = num_of_beneficiaries;
+        if (temp > 0){
+        for (uint i = 1; i < temp + 1; i++){
+            if (beneficiaries_addr[i]  == _ben_addr) {
+                is_in = true;
+                break;
+            }}} 
+        require (!is_in);
+        num_of_beneficiaries++;
+        beneficiaries_addr[num_of_beneficiaries] = _ben_addr;
+    }
+    
+    function add_validators (address _validator_addr) external only_owner{
+        
+        require(num_of_validators <= max_validators);// it ensures that the charity cannot define more than predetermined number of validators. 
+        //To prevent duplication, check if the new validator has not already been registered.
+        bool is_in;
+        uint temp=num_of_validators;
+        if (num_of_validators > 0){
+            for (uint i = 1; i < temp + 1; i++){
+                 if (validators_rep[i] == _validator_addr){ 
+                    is_in = true;
+                    break;
+                 }}}
+        require (!is_in);
+        num_of_validators++;
+        validators_rep[num_of_validators] = _validator_addr;
+    }
+// when a donor creates a project it does not assign any token. In order to assing token it needs to call
+//  assign_token_to_contract in token_contract. The latter function will assign the specified number of tokens to this project in master contract.
+   function set_project (string description,  address _deneficiaries_addr, uint val_period, uint cancelation_period) external  {
+        //require (_amount > min_allowed_tokens);
+        //xxxx Add a check to ensure that only those who has tokens must be able to create a project. 
+        //it checks if the number of validators and beneficiaries have reached the treshold otherwise does nothing
+        require(num_of_validators == max_validators  && num_of_beneficiaries == max_beneficiaries);//added June 19th
+        //check if the donor is not validator (added June 19th).
+        bool is_in;
+        for (uint p = 1;p < max_validators+1; p++){
+            if(msg.sender == validators_rep[p]){
+                is_in = true;
+                break;
+            }}
+        require(!is_in);
+        is_in = false;// we have to reuse the variable, otherwise the stack gets too deep.
+        //check if the donor is not beneficiary (added June 19th)..
+        for (p = 1;p < max_beneficiaries+1; p++){
+            if(msg.sender == beneficiaries_addr[p]){
+                is_in = true;
+                break;
+            }}
+        require(!is_in);
+        Project memory pro;
+         is_in = false;// we have to reuse the variable, otherwise the stack gets too deep.
+        //check if the donor has already created any project in this master_contract. If no, add it to donors_rep.
+        if (num_of_donors > 0){
+            for (uint j = 1; j < num_of_donors + 1; j++){
+                if (donors_rep[j] == msg.sender){
+                    is_in = true;
+                    break;
+                }}}
+        if (num_of_donors == 0 || is_in != true){
+                num_of_donors++;
+                donors_rep[num_of_donors] = msg.sender; 
+            }
+        num_projects_donor_created[msg.sender] += 1;
+        //UI design: given donor address, this master contract adress and num_projects_donor_engaged[msg.sender], it can get its project ID for each project_j, where 0<j<= num_projects_donor_created.
+        // note that it first needs to read the content of num_projects_donor_engaged. So re-generating the donor project_ID for each project it has created can be done in UI. 
+        pro.ID = gen_id (msg.sender, this, num_projects_donor_created[msg.sender]);
+        pro.pro_start_date = now;
+        pro.pro_expiry_date = pro.pro_start_date + val_period;
+        require (pro.pro_expiry_date < cont_expiry_date); // each project expiry date must be smalltr than the contract expiry date
+        Token_Contract tc = Token_Contract (token_contract_addr);
+       // checks if the donor is allocating its token to a valid recipient.
+        bool is_valid_beneficiary;
+        uint temp_0 = num_of_beneficiaries;// to improve efficiency.
+        for (uint i = 1; i< temp_0 + 1; i++){
+            if (beneficiaries_addr[i] == _deneficiaries_addr){
+                is_valid_beneficiary = true;
+                break;
+            }}
+        require (is_valid_beneficiary);
+        pro.donor_addr = msg.sender;
+        pro.recipient_addr = _deneficiaries_addr;
+        pro.desc = description;
+        pro.pro_cancelation_period = cancelation_period;
+        projects_rep[pro.ID] = pro;
+        projects_count++;
+        uint temp_1 = projects_count;// to improve efficiency.
+        uint temp_2 = 0;
+        // check if there is any available space in projects_ID_rep as a result of project cancelation/deletion. If there's, then put the new project in that space (rather than expanding the repository) 
+        //for (uint k = 1;k < temp_1 + 1; k++){
+        for (uint k = 1;k < id_counter + 1; k++){
+            if(projects_ID_rep[k] == 0x000000000000){
+                temp_2 = k;
+                break;
+            }}
+        if (temp_2 == 0) {
+            project_count++;
+            id_counter++;
+            temp_2 =id_counter;
+        }
+        projects_ID_rep[temp_2] = pro.ID;
+    }
+ // Two conditions are checked (1) if the project's cancelation period has passed (2) the project's not expired yet.
+     function check_project_conditions (bytes6 pro_id) internal returns (bool res){
+        Project pro = projects_rep[pro_id];
+         // condition (1) is checked 
+        require (now > pro.pro_start_date + pro.pro_cancelation_period);
+         // condition (2) is checked
+        if (now < pro.pro_expiry_date){ 
+           res = true;
+        }}
+            // if both conditions are met, return true.
+    // given a project's ID, the validator can insert it's input: true/false
+    // if it's approved by "num_of_required_validations" validators, the token would be transfered to the beneficiary.
+    function validate_project (uint _index, bool res)  external{
+        //check if the caller is a legitimate validator.
+        bool is_legit_valid;
+        bool transfered; 
+        //check if the validatros is legitimate.
+        for (uint i = 1;i < num_of_validators + 1; i++){
+            if (msg.sender == validators_rep[i]){
+                is_legit_valid = true;
+                break;
+            }}
+        require (is_legit_valid);
+        // fetch the project ID.
+        require (_index < project_count + 1);
+        bytes6 project_id = projects_ID_rep[_index];
+        bool is_in;
+        Project pr = projects_rep[project_id];
+        //each validator can validate only once, so make sure he has not already provided any input to this project.
+        if (pr.num_of_validators_engaged > 0){
+            for (uint j = 1;j < pr.num_of_validators_engaged + 1; j++ ){
+                if (pr.pro_validators_rep[j] == msg.sender){
+                    is_in = true;
+                    break;
+                }}}
+        require (!is_in);    // so the validator shouldn't already participated in this project.    
+        // it can validate only if some tokens have been allocated to this project.
+        require (pr.assined_tokens > 0);
+        // it checks if the project conditions have been met,e.g. not expired yet, or is not in the project cancelation period.
+        bool met = check_project_conditions (project_id);
+        //the validator input is stored for this project.
+        require (met);// so it wont procceed if the conditions are not met (added on June 20th).  
+        pr.num_of_validators_engaged++;
+        pr.pro_validators_rep[pr.num_of_validators_engaged] = msg.sender;
+        pr.validators_input[msg.sender] = res;
+        if (res) 
+            pr.num_of_validations++;
+        if (pr.num_of_validations == num_of_required_validations && met) {
+          // If the project has been approved by num_of_required_validations, then the token is transfered to the recipient and decrement the donor token in the current contract is decremented.  
+          Token_Contract tc = Token_Contract (token_contract_addr);
+          transfered = tc.tranfer_tokens (pr.donor_addr, project_id, pr.assined_tokens, pr.recipient_addr);
+          if (transfered){
+              token_locked[pr.donor_addr] -= pr.assined_tokens;
+              pr.token_transfered = true;
+          }}}
+    // Only the pro_creator can cancel the project, if it's done within the valid cancelation_period
+    function cancel_project (bytes6 project_id) external{
+        Project pro = projects_rep[project_id];
+        address creator = pro.donor_addr;// this is done to improve efficiency... 
+        // only the project creator can cancel it.
+        require (creator == msg.sender);
+        require (now < pro.pro_start_date + pro.pro_cancelation_period);
+        //if some tokens have already been assigned to the project, then unlock them in token_contract. 
+        if (pro.assined_tokens > 0){
+            Token_Contract tc = Token_Contract (token_contract_addr);
+            uint _amount = projects_rep[project_id].assined_tokens;
+            //require (tc.unlock_token (msg.sender, _amount, project_id));
+            tc.unlock_token (msg.sender, _amount, project_id);
+            token_locked[msg.sender] -= _amount;
+        }
+        // find the id from  projects_ID_rep and delete it from projects_ID_rep.
+        uint temp = id_counter;
+        for (uint j = 1;j < temp + 1; j++){
+            if ( projects_ID_rep[j] == project_id){
+            delete projects_ID_rep[j];
+            break;
+            }}
+        projects_count--;   
+        delete (projects_rep[project_id]); 
+    }
+    // is called only by assign_token_to_contract() in token_contract.
+    function increment_tokens (address _donor_addrsx, uint _amount, bytes6 pro_id) external{
+        require (msg.sender == token_contract_addr);
+        require (projects_rep[pro_id].donor_addr == _donor_addrsx); // Only the project creator can assign token to contracts. 
+        require (projects_rep[pro_id].assined_tokens == 0); // Tokens can be assigned only once.
+        token_locked[_donor_addrsx] += _amount;
+        projects_rep[pro_id].assined_tokens += _amount;
+    }
+    // Later on, if we want an auditor to check all the project to see why a validator did NOT valid a project, then we need to REMOVE the following two functionds. 
+    //Allows anybody to remove an expired project (when either a project or master contract is expired) and refund the donor.
+     function remove_an_expired_project (bytes6 _pro_id) external{
+        Project memory pro = projects_rep[_pro_id];
+        require (pro.token_transfered != true);// checks if the project's tokens have not been tranfered. 
+       
+        Token_Contract tc = Token_Contract (token_contract_addr);
+        //if (pro.pro_expiry_date > now || cont_expiry_date > now){
+            if (pro.pro_expiry_date < now || cont_expiry_date < now){
+                if (pro.assined_tokens > 0){
+                    tc.unlock_token (pro.donor_addr, pro.assined_tokens, _pro_id);//send back the allocated token to its owner
+                } 
+                for (uint j = 1;j < id_counter + 1; j++){
+                    if ( projects_ID_rep[j] == _pro_id){
+                        delete projects_ID_rep[j];
+                        break;}
+                }
+                //num_projects_donor_engaged[msg.sender]--;
+                delete (projects_rep[_pro_id]); //remove the project from the repository, i.e. set the projects_rep[id] to zero;
+                projects_count -= 1;// decrement the project_count by one.  
+            }} 
+    //Allows any party to go through the project repository, remove all the expired projects (when either a project or master contract is expired) and refund the donor. 
+    function remove_all_expired_projects () external{
+        bytes6 id;
+        bool temp;
+        uint temp_1 = num_of_donors;
+        Token_Contract tc = Token_Contract (token_contract_addr);
+        address _don_adr;
+        for (uint i = 1; i < temp_1 + 1; i++){
+             _don_adr = donors_rep[i];
+            uint count = num_projects_donor_created[_don_adr];
+            for (uint j = 1 ; j < count + 1; j++){
+                id = gen_id (_don_adr, this, j);
+                Project memory pro = projects_rep[id];
+                // check if the token has not transfered yet and the project has not been deleted. 
+                if (!pro.token_transfered && pro.pro_start_date != 0){
+                    if (pro.pro_expiry_date < now || cont_expiry_date < now){
+                        projects_count --; 
+                        if (pro.assined_tokens > 0){
+                            tc.unlock_token (pro.donor_addr, pro.assined_tokens, pro.ID); 
+                        }
+                        for (uint k = 1;k < id_counter+1; k++){
+                            if (projects_ID_rep[k] == id){
+                                delete projects_ID_rep[k];
+                                break;
+                                }
+   
+                        }
+                        delete (projects_rep[id]); 
+        }}}}}
+    // it generates a uniqeu ID (with a high probability) for a donor's project. The ID is unique even if the donor generates multiple projects both within a master_contract and among all master contracts 
+    function gen_id (address _donor_adr, address _cont_addr, uint val) internal returns (bytes6 res){
+            res =   bytes6 (keccak256 (_donor_adr, _cont_addr, val));
+    }
+    //xxxxx external function is much cheaper than public one: (bytes6 _id) external  returns (address res)
+    //function get_project_creator (bytes6 _id) public view returns ( address){
+      //  Project pro = projects_rep[_id];
+     //   address res;
+     //   res = pro.donor_addr;
+     //   return res;
+   // }
+    //the current implementation is suitable for the case where a validator will be hold accountable for the project he has validated, not for the ones he hasn't.
+    // the latter case can be important, because some condition has taken place in the real world, but the validator has not validated it (i.e. it has ignored it). So the auditor may want to detect this kind of problems as well. 
+}
+ // Abstract contact
+ contract Token_Contract{
+     function unlock_token (address , uint , bytes6 ) external {}
+     function assign_token_to_contract (uint , address ) external{}
+     function tranfer_tokens (address , bytes6 , uint , address ) external returns (bool){}
+     mapping (address => uint) public token_balances;
+     struct Project_tc{
+        address contract_addr;
+        uint token_amount;
+    }}
