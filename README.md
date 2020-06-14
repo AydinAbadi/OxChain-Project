@@ -1,5 +1,5 @@
 # OxChain-Project
-http://oxchain.uk/
+https://gow.epsrc.ukri.org/NGBOViewGrant.aspx?GrantRef=EP/N028198/1
 
 **The contracts have been tested on geth VERSION: 1.6.7-stable-ab5646c5 and remix: v0.4.21+commit.**
 
